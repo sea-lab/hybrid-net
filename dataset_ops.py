@@ -1,31 +1,98 @@
+import os
+import re
 from collections import defaultdict
+from pathlib import Path
+from typing import List, Optional
+
+import numpy as np
+import pandas as pd
+import tensorflow as tf
 
 try:
     from tqdm import notebook as tqdm
 except ImportError:
     tqdm = None
 
-import os
-from typing import List, Optional
-
-import pandas as pd
-import numpy as np
-import tensorflow as tf
-
 
 class TestsManager(object):
+    state_cols = []
+
     def __init__(self, dataset_dir='./h5', runs_filename='runs.hdf'):
+        if not isinstance(dataset_dir, Path):
+            dataset_dir = Path(str(dataset_dir))
+        if not isinstance(runs_filename, Path):
+            runs_filename = Path(str(runs_filename))
+
         self.dataset_dir = dataset_dir
         self.runs_filename = runs_filename
         self.test_data_cache = dict()
         self.unique_states = defaultdict(self.count_states)
+        self._signal_targets_prefetched = None
+
+    def count_states(self):
+        return len(self.unique_states)
+
+    def _state_ids(self, df: pd.DataFrame):
+        df = df[self.state_cols]
+        change_locations = (df != df.shift()).apply(lambda x: np.logical_or.reduce(x.to_numpy()), axis=1)
+        #     change_locations = np.squeeze(np.where(change_locations))
+        #     change_locations = np.delete(change_locations, np.where(change_locations==0))
+        #     self.unique_states = defaultdict(lambda *_: len(self.unique_states))
+        return df.loc[change_locations].apply(lambda row: self.unique_states[tuple(x[1] for x in sorted(row.items()))],
+                                             axis=1)
+
+    #     return changeLocations
+
+    def _generate_signals_targets(self, selected_runs: pd.DataFrame, *, features: List[str],
+                                  max_length: Optional[int] = None):
+        runs_iter = selected_runs.iterrows()
+        if tqdm:
+            runs_iter = tqdm.tqdm(runs_iter, total=selected_runs.shape[0])
+
+        for tid, run in runs_iter:
+            tdata, _ = self.read_test_data(tid, run)
+            signals = tdata[[*features]]
+            targets = tdata['state_id']
+
+            if max_length is not None and signals.shape[0] > max_length:
+                signals = signals.iloc[:max_length]
+                targets = targets.iloc[:max_length]
+
+            yield tid, signals, targets
+
+    def preload_data(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: Optional[int] = None):
+        if self._signal_targets_prefetched is None:
+            print("Loading data", end='...')
+            self._signal_targets_prefetched = [
+                *self._generate_signals_targets(selected_runs, features=features, max_length=max_length)]
+            print("done")
+
+        return self._signal_targets_prefetched
+
+    def iterate(self):
+        assert self._signal_targets_prefetched is not None, "Fetch the data first"
+
+        return self._signal_targets_prefetched
+
+    def get_all_available_tests(self):
+        raise NotImplementedError()
+
+    def read_test_data(self, tid, run):
+        raise NotImplementedError()
+
+
+class MicroPilotTestsManager(TestsManager):
+    state_cols = ['Laileron', 'Lelevator', 'Lflap', 'Lrudder', 'Lthrottle']
+
+    def __init__(self, dataset_dir='./h5', runs_filename='runs.hdf'):
+        super(MicroPilotTestsManager, self).__init__(dataset_dir, runs_filename)
         self.commands = pd.read_csv('COMMANDS.csv', header=None, index_col=1, names=['name'])
         self._signal_targets_prefetched = None
 
     def get_all_available_tests(self):
         if os.path.exists(self.runs_filename):
             return pd.read_hdf(self.runs_filename, 'runs')
-        
+
         all_runs = []
         for name in os.listdir(self.dataset_dir):
             if name[-3:] != '.h5':
@@ -44,74 +111,86 @@ class TestsManager(object):
 
         return all_runs
 
-    def read_test_data(self, run):
+    def read_test_data(self, _, run):
         testid, planeid = run['Test ID'], run['PlaneId']
         if (testid, planeid) not in self.test_data_cache:
-            tdata: pd.DataFrame = pd.read_hdf(f'{self.dataset_dir}/{testid}_{planeid}.h5', key=f'TestData_{testid}_{planeid}')
+            tdata: pd.DataFrame = pd.read_hdf(f'{self.dataset_dir}/{testid}_{planeid}.h5',
+                                              key=f'TestData_{testid}_{planeid}')
             tdata['state_id'] = np.nan
             maxT = tdata.index.max()
-            
+
             states = self._state_ids(tdata)
-            nice_to_remove = {t1 for t1, t2 in zip(states.index, states.index[1:]) if t2-t1 < 5}
+            nice_to_remove = {t1 for t1, t2 in zip(states.index, states.index[1:]) if t2 - t1 < 5}
             states.drop(nice_to_remove, axis=0, inplace=True)
             tdata['state_id'] = states.iloc[0]
             for (t1, s1), t2 in zip(states.items(), states.index[1:]):
                 tdata.loc[t1:t2, 'state_id'] = s1
             t1, t2, s1 = states.iloc[[-1]].index[0], maxT, states.iloc[-1]
             tdata.loc[t1:t2, 'state_id'] = s1
-            
+
             self.test_data_cache[(testid, planeid)] = tdata, states
 
         return self.test_data_cache[(testid, planeid)]
 
-    def count_states(self):
-        return len(self.unique_states)
-
-    def _state_ids(self, df: pd.DataFrame):
-        cols = ['Laileron', 'Lelevator', 'Lflap', 'Lrudder', 'Lthrottle']
-        df = df[cols]
-        changeLocations = (df != df.shift()).apply(lambda x: np.logical_or.reduce(x.to_numpy()), axis=1)
-    #     changeLocations = np.squeeze(np.where(changeLocations))
-    #     changeLocations = np.delete(changeLocations, np.where(changeLocations==0))
-    #     self.unique_states = defaultdict(lambda *_: len(self.unique_states))
-        return df.loc[changeLocations].apply(lambda row: self.unique_states[tuple(x[1] for x in sorted(row.items()))], axis=1)
-
-    #     return changeLocations
-
     def command_names(self, df: pd.DataFrame):
         return df['currentCommandId'].apply(lambda cid: self.commands.loc[cid])
 
-    def _generate_signals_targets(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: Optional[int]=None):
-        runs_iter = selected_runs.iterrows()
-        if tqdm:
-            runs_iter = tqdm.tqdm(runs_iter, total=selected_runs.shape[0])
 
-        for tid, run in runs_iter:
-            tdata, _ = self.read_test_data(run)
-            signals = tdata[[*features]]
-            targets = tdata['state_id']
+class PaparazziTestManager(TestsManager):
+    state_cols = ['ap_gaz', 'ap_lateral', 'ap_horizontal', 'v_ctl_auto_throttle_submode', 'v_ctl_climb_mode',
+                  'h_ctl_pitch_mode', 'nav_mode']
 
-            if max_length is not None and signals.shape[0] > max_length:
-                signals = signals.iloc[:max_length]
-                targets = targets.iloc[:max_length]
+    def __init__(self, dataset_dir='./pprz_h5', runs_filename='pprz_runs.hdf'):
+        super(PaparazziTestManager, self).__init__(dataset_dir, runs_filename)
 
-            yield tid, signals, targets
+    def get_all_available_tests(self):
+        run_file = self.runs_filename
+        if run_file.exists():
+            return pd.read_hdf(run_file, 'runs')
 
-    def preload_data(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: Optional[int]=None):
-        if self._signal_targets_prefetched is None:
-            print("Loading data", end='...')
-            self._signal_targets_prefetched = [*self._generate_signals_targets(selected_runs, features=features, max_length=max_length)]
-            print("done")
+        test_number = re.compile(r'test_(\d+)\.h5')
 
-        return self._signal_targets_prefetched
+        test_lengths = []
+        directory = Path(__file__).parent / 'pprz_h5'
+        for file in directory.iterdir():
+            if not file.is_file() or file.suffix != '.h5':
+                continue
+            idx = int(re.findall(test_number, file.name)[0])
+            try:
+                df = pd.read_hdf(file)
+                test_lengths.append((idx, df.shape[0]))
+                del df
+            except:
+                print(file)  # TODO: jesus! I look like a CS101 student here.
 
-    def iterate(self):
-        assert self._signal_targets_prefetched is not None, "Fetch the data first"
+        test_lengths_df = (pd.DataFrame(test_lengths, dtype='int32', columns=['idx', 'Test Length'])
+                           .set_index('idx', drop=True)
+                           .sort_index())
+        test_lengths_df.to_hdf(run_file, key='runs')
 
-        return self._signal_targets_prefetched
+        return test_lengths_df
+
+    def read_test_data(self, run_id, _):
+        if run_id not in self.test_data_cache:
+            tdata: pd.DataFrame = pd.read_hdf(self.dataset_dir / f'test_{run_id}.h5')  # noqa: it's going to be a df
+            tdata['state_id'] = np.nan
+            max_t = tdata.index.max()
+
+            states = self._state_ids(tdata)
+            nice_to_remove = {t1 for t1, t2 in zip(states.index, states.index[1:]) if t2 - t1 < 5}
+            states.drop(nice_to_remove, axis=0, inplace=True)
+            tdata['state_id'] = states.iloc[0]
+            for (t1, s1), t2 in zip(states.items(), states.index[1:]):
+                tdata.loc[t1:t2, 'state_id'] = s1
+            t1, t2, s1 = states.iloc[[-1]].index[0], max_t, states.iloc[-1]
+            tdata.loc[t1:t2, 'state_id'] = s1
+
+            self.test_data_cache[run_id] = tdata, states
+
+        return self.test_data_cache[run_id]
 
 
-class TensorflowDataset():
+class TensorflowDataset:
     def __init__(self, dataset_manager: TestsManager):
         self.dataset_manager = dataset_manager
 
@@ -133,19 +212,20 @@ class TensorflowDataset():
                 s = tf.pad(s, paddings, 'CONSTANT')
                 t = tf.pad(t, paddings, 'CONSTANT')
                 mask = tf.pad(mask, paddings, 'CONSTANT', constant_values=False)
-                yield {'signals':s, 'mask': mask}, t
+                yield {'signals': s, 'mask': mask}, t
 
         return _gen
 
-    def get_dataset(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: int, batch_size: int=-1) -> tf.data.Dataset:
+    def get_dataset(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: int,
+                    batch_size: int = -1) -> tf.data.Dataset:
         ds = tf.data.Dataset.from_generator(
             self._create_padded_generator(selected_runs, features=features, max_length=max_length),
             output_types=({'signals': tf.float32, 'mask': tf.float32}, tf.float32),
             output_shapes=({
-                    'signals': tf.TensorShape([max_length, len(features)]),
-                    'mask': tf.TensorShape([max_length, 1])
-                }, 
-                tf.TensorShape([max_length, self.dataset_manager.count_states()])),
+                               'signals': tf.TensorShape([max_length, len(features)]),
+                               'mask': tf.TensorShape([max_length, 1])
+                           },
+                           tf.TensorShape([max_length, self.dataset_manager.count_states()])),
         )
         if batch_size == -1:
             return ds
