@@ -8,8 +8,8 @@ import metrics
 import model_helper
 
 metrics_reporting = [
-    metrics.Precision(name='prec_15', tolerance=5),
-    metrics.Recall(name='recall_15', tolerance=5),
+    metrics.Precision(name='prec_5', tolerance=5),
+    metrics.Recall(name='recall_5', tolerance=5),
     metrics.Precision(name='prec_15', tolerance=15),
     metrics.Recall(name='recall_15', tolerance=15),
     metrics.Precision(name='prec_25', tolerance=25),
@@ -88,6 +88,18 @@ def prepare_transfer_model(original_model: tf.keras.Model, original_model_params
     freeze_last_n_layers(new_model, layers_to_drop)
 
     return new_model
+
+
+def load_model(file_name: str, validation_dataset: tf.data.Dataset, ):
+    from model_helper import MaskStealingLayer
+    from metrics import soft_dice_loss, F1, Precision, Recall
+    new_model = tf.keras.models.load_model(file_name, custom_objects={
+        'MaskStealingLayer': MaskStealingLayer,
+        'soft_dice_loss': soft_dice_loss,
+        'f1_score': F1(Precision(), Recall()),
+    })
+    return (new_model,
+           evaluate_model(new_model, validation_dataset),)
 
 
 def train_and_test_transfer_model(X: Union[int, float], optimizer: Union[str, tf.keras.optimizers.Optimizer],
