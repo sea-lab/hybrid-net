@@ -2,6 +2,7 @@ import tensorflow as tf
 
 find_change_indices = lambda y: tf.where(tf.concat([y[:1], y[:-1]], 0) != y)
 
+
 @tf.function
 def positives(Ys, tolerance=1, alpha=0.5):
     y_pred = Ys[0]

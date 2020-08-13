@@ -3,7 +3,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt  # noqa
 import numpy as np  # noqa
-import pandas as pd
+import pandas_format  # noqa
 import tensorflow as tf
 
 import dataset_ops
@@ -23,7 +23,6 @@ parser.add_argument('i', type=int, metavar='skip', default=0)
 parser.add_argument('model_weights')
 
 args = parser.parse_args()
-pd.set_option('display.max_columns', None)  # show all columns
 if not args.no_cuda:
     import cuda
     cuda.initialize()

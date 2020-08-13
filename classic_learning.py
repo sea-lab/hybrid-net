@@ -5,6 +5,7 @@ import dataset_ops
 import numpy as np
 import datetime
 import cuda
+import pandas_format  # noqa
 from pathlib import Path
 from sklearn import linear_model
 from sklearn import tree
@@ -25,7 +26,6 @@ parser.add_argument('models', nargs='+')
 args = parser.parse_args()
 print(args)
 
-pd.set_option('display.max_columns', None)  # show all columns
 cuda.initialize()
 
 # dataset_manager = dataset_ops.MicroPilotTestsManager(dataset_dir=Path('./h5'), runs_filename='runs.hdf')
