@@ -18,7 +18,7 @@ class MaskStealingLayer(tf.keras.layers.Masking):
         return outputs
 
 
-def make_model(inputs, outputs, input_length, n_states, convs, grus):
+def get_model_input_output_layers(inputs, outputs, input_length, n_states, convs, grus, skip_denses=0):
     n_in = len(inputs)
     n_out = len(outputs)
     n_features = n_in + n_out
@@ -38,13 +38,22 @@ def make_model(inputs, outputs, input_length, n_states, convs, grus):
         x = tf.keras.layers.GRU(gru_size, return_sequences=True)(x)
         # x = tf.keras.layers.LeakyReLU()(x)
 
-    x = tf.keras.layers.Dense(grus[-1])(x)
-    x = tf.keras.layers.LeakyReLU()(x)
+    if skip_denses >= 3:
+        raise ValueError('There are only 2 dense layers in the end!')
 
-    x = tf.keras.layers.Dense(n_states, bias_initializer=bias_initializer, activation='softmax')(x)
+    if not skip_denses >= 2:
+        x = tf.keras.layers.Dense(grus[-1])(x)
+        x = tf.keras.layers.LeakyReLU()(x)
+
+    if not skip_denses >= 1:
+        x = tf.keras.layers.Dense(n_states, bias_initializer=bias_initializer, activation='softmax')(x)
 
     # x = tf.keras.layers.UpSampling1D(2 ** 1)(x)
 
-    model = tf.keras.Model(inputs=[signals, mask], outputs=x)
+    return [signals, mask], x
 
+
+def make_model(*args, **kwargs):
+    input_layer, output_layer = get_model_input_output_layers(*args, **kwargs)
+    model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
     return model

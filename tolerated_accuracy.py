@@ -1,6 +1,12 @@
 import tensorflow as tf
 
-find_change_indices = lambda y: tf.where(tf.concat([y[:1], y[:-1]], 0) != y)
+
+# find_change_indices = lambda y: tf.where(tf.concat([y[:1], y[:-1]], 0) != y)
+
+
+@tf.function
+def find_change_indices(y):
+    return tf.where(tf.concat([y[:1], y[:-1]], 0) != y)
 
 
 @tf.function
