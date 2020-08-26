@@ -2,7 +2,7 @@ import os
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -216,8 +216,7 @@ class TensorflowDataset:
 
         return _gen
 
-    def get_dataset(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: int,
-                    batch_size: int = -1) -> tf.data.Dataset:
+    def get_dataset(self, selected_runs: pd.DataFrame, *, features: List[str], max_length: int) -> tf.data.Dataset:
         ds = tf.data.Dataset.from_generator(
             self._create_padded_generator(selected_runs, features=features, max_length=max_length),
             output_types=({'signals': tf.float32, 'mask': tf.float32}, tf.float32),
@@ -227,7 +226,45 @@ class TensorflowDataset:
                            },
                            tf.TensorShape([max_length, self.dataset_manager.count_states()])),
         )
-        if batch_size == -1:
-            return ds
 
-        return ds.batch(batch_size)
+        return ds
+
+
+def split_dataset(ds, split_proportion: Tuple[int, int, int]):
+    def get_second(_, x):
+        return x
+
+    limits = [0]
+    for p in split_proportion:
+        limits.append(limits[-1] + p)
+
+    def make_sieve(idx):
+        lower, upper, total = limits[idx], limits[idx + 1], limits[-1]
+
+        def _sieve(index, _):
+            r = index % total
+            return (lower <= r) and (r < upper)
+        return tf.function(_sieve)
+
+    return tuple(
+        ds.enumerate().filter(make_sieve(idx)).map(get_second)
+        for idx in range(len(split_proportion))
+    )
+
+
+def load_and_split(dataset_manager, selected_runs, features, split_ratio, batch_size, max_length=None):
+    if not max_length:
+        max_length = selected_runs['Test Length'].max()
+
+    tfdataset = TensorflowDataset(dataset_manager)
+    ds = tfdataset.get_dataset(selected_runs, features=features, max_length=max_length)
+    train_dataset, test_dataset, validation_dataset = split_dataset(ds, split_proportion=split_ratio)
+    train_dataset, test_dataset, validation_dataset = (
+        dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+            .batch(batch_size)
+            .shuffle(buffer_size=15)
+        for dataset in (train_dataset, test_dataset, validation_dataset)
+    )
+
+    return ds, train_dataset, test_dataset, validation_dataset
+

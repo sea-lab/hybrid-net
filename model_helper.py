@@ -31,18 +31,21 @@ def get_model_input_output_layers(inputs, outputs, input_length, n_states, convs
     x = signals
     x = MaskStealingLayer(0)((x, mask))
 
+    last_layer_size = input_length
     for filters, conv_size in convs:
         x = tf.keras.layers.Conv1D(filters=filters, kernel_size=conv_size, padding="same", name=f'conv_{conv_size}')(x)
+        last_layer_size = conv_size
 
     for gru_size in grus:
         x = tf.keras.layers.GRU(gru_size, return_sequences=True)(x)
         # x = tf.keras.layers.LeakyReLU()(x)
+        last_layer_size = gru_size
 
     if skip_denses >= 3:
         raise ValueError('There are only 2 dense layers in the end!')
 
     if not skip_denses >= 2:
-        x = tf.keras.layers.Dense(grus[-1])(x)
+        x = tf.keras.layers.Dense(last_layer_size)(x)
         x = tf.keras.layers.LeakyReLU()(x)
 
     if not skip_denses >= 1:
@@ -54,6 +57,7 @@ def get_model_input_output_layers(inputs, outputs, input_length, n_states, convs
 
 
 def make_model(*args, **kwargs):
+    name = kwargs.pop('name', None)
     input_layer, output_layer = get_model_input_output_layers(*args, **kwargs)
-    model = tf.keras.Model(inputs=input_layer, outputs=output_layer)
+    model = tf.keras.Model(inputs=input_layer, outputs=output_layer, name=name)
     return model
