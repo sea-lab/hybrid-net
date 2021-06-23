@@ -161,7 +161,7 @@ class PaparazziTestManager(TestsManager):
                 test_lengths.append((idx, df.shape[0]))
                 del df
             except:
-                print(file)  # TODO: jesus! I look like a CS101 student here.
+                print(file)  # TODO: Bad practice in catching the error and in hadnling it. Should be fixed
 
         test_lengths_df = (pd.DataFrame(test_lengths, dtype='int32', columns=['idx', 'Test Length'])
                            .set_index('idx', drop=True)
